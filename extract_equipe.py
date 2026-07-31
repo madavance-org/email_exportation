@@ -64,9 +64,9 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 # Union des adresses deja utilisees comme DEFAULT_SENDERS dans les autres
 # scripts du repo (OV, Factures/Proforma, Banque, Decaissement, MVOLA, PJ).
 DEFAULT_SENDERS = [
+    "mickael.consultant@madavance.org",
     "admin@madavance.org",
     "olivia@madavance.org",
-    "mickael.consultant@madavance.org",
     "rakitrynyavo@madavance.org",
     "holisoa.raharijaona@madavance.org",
     "eddy.rajaonarivony@madavance.org",

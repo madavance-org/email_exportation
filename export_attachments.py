@@ -98,10 +98,26 @@ def _compute_retry_delay(resp: requests.Response, attempt: int) -> float:
 def request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
     """Wrapper autour de requests.request qui retente automatiquement sur les
     codes HTTP transitoires (429/500/502/503/504), avec un delai adapte a la
-    reponse de l'API quand elle en fournit un."""
+    reponse de l'API quand elle en fournit un.
+
+    Retente aussi sur les erreurs reseau bas niveau (connexion coupee, timeout
+    en cours d'ecriture...) qui n'ont pas de reponse HTTP associee -- vu en
+    prod sur un gros upload SharePoint : 'Connection aborted' / 'The write
+    operation timed out'. Sans ca, une simple coupure reseau transitoire fait
+    planter tout le run au lieu d'etre retentee comme les codes 429/5xx."""
     attempt = 0
     while True:
-        resp = requests.request(method, url, **kwargs)
+        try:
+            resp = requests.request(method, url, **kwargs)
+        except requests.exceptions.RequestException as exc:
+            if attempt >= MAX_TRANSIENT_RETRIES:
+                raise
+            delay = min(2 ** attempt, MAX_RETRY_DELAY_SECONDS)
+            print(f"    (Erreur reseau '{exc}', nouvelle tentative dans {delay:.0f}s...)")
+            time.sleep(delay)
+            attempt += 1
+            continue
+
         if resp.status_code not in TRANSIENT_STATUS_CODES or attempt >= MAX_TRANSIENT_RETRIES:
             return resp
         delay = _compute_retry_delay(resp, attempt)

@@ -103,9 +103,22 @@ def _compute_retry_delay(resp: requests.Response, attempt: int) -> float:
 
 
 def request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
+    # Retente aussi sur les erreurs reseau bas niveau (connexion coupee,
+    # timeout en cours d'ecriture...), pas seulement sur les codes HTTP
+    # transitoires (429/5xx) d'une reponse recue.
     attempt = 0
     while True:
-        resp = requests.request(method, url, **kwargs)
+        try:
+            resp = requests.request(method, url, **kwargs)
+        except requests.exceptions.RequestException as exc:
+            if attempt >= MAX_TRANSIENT_RETRIES:
+                raise
+            delay = min(2 ** attempt, MAX_RETRY_DELAY_SECONDS)
+            print(f"    (Erreur reseau '{exc}', nouvelle tentative dans {delay:.0f}s...)")
+            time.sleep(delay)
+            attempt += 1
+            continue
+
         if resp.status_code not in TRANSIENT_STATUS_CODES or attempt >= MAX_TRANSIENT_RETRIES:
             return resp
         delay = _compute_retry_delay(resp, attempt)

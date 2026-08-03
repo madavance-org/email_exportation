@@ -48,6 +48,7 @@ Usage :
 import argparse
 import base64
 import hashlib
+import json
 import os
 import re
 import sys
@@ -61,6 +62,15 @@ from urllib.parse import quote
 import requests
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+# Log des messages deja traites, depose au meme endroit que les pieces
+# jointes de chaque boite (sous-dossier SharePoint de la personne), pour
+# permettre de reprendre la ou un run precedent s'est arrete (ex: coupe par
+# la limite de 6h de GitHub Actions) sans tout retelecharger/reuploader.
+LOG_FILENAME = "processed_log.json"
+# Sauvegarde du log tous les N messages traites (et a la fin de chaque
+# boite), pour ne pas perdre la progression si le run est interrompu en
+# cours de route.
+LOG_SAVE_EVERY = 10
 # Union des adresses deja utilisees comme DEFAULT_SENDERS dans les autres
 # scripts du repo (OV, Factures/Proforma, Banque, Decaissement, MVOLA, PJ).
 DEFAULT_SENDERS = [
@@ -360,6 +370,43 @@ def upload_file_to_sharepoint(session: GraphSession, drive_id: str, parent_item_
         start = end + 1
 
 
+def get_child_item_id(session: GraphSession, drive_id: str, parent_item_id: str, name: str) -> str | None:
+    """Trouve l'id d'un enfant (fichier ou dossier) par nom, ou None s'il n'existe pas."""
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{parent_item_id}/children"
+    resp = session.get(url, params={"$select": "id,name"}, timeout=30)
+    raise_for_status_verbose(resp)
+    for item in resp.json().get("value", []):
+        if item.get("name") == name:
+            return item["id"]
+    return None
+
+
+def download_processed_log(session: GraphSession, drive_id: str, mailbox_folder_id: str) -> set:
+    """Recupere les ids des messages deja traites pour cette boite, depuis le
+    log JSON depose au meme endroit que ses pieces jointes. Ensemble vide si
+    le fichier n'existe pas encore (1er run pour cette boite)."""
+    item_id = get_child_item_id(session, drive_id, mailbox_folder_id, LOG_FILENAME)
+    if item_id is None:
+        return set()
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/content"
+    resp = session.get(url, timeout=30)
+    raise_for_status_verbose(resp)
+    try:
+        return set(resp.json().get("processed_message_ids", []))
+    except ValueError:
+        return set()
+
+
+def upload_processed_log(session: GraphSession, drive_id: str, mailbox_folder_id: str, processed_ids: set) -> None:
+    """Ecrit/ecrase le log JSON des messages traites, au meme endroit que les
+    pieces jointes de cette boite."""
+    safe_name = quote(LOG_FILENAME)
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{mailbox_folder_id}:/{safe_name}:/content"
+    payload = json.dumps({"processed_message_ids": sorted(processed_ids)}, indent=2).encode("utf-8")
+    resp = session.request("PUT", url, headers={"Content-Type": "application/json"}, data=payload, timeout=30)
+    raise_for_status_verbose(resp)
+
+
 # --- Email de confirmation (Microsoft Graph) --------------------------------------
 
 
@@ -405,6 +452,7 @@ def run_export(session: GraphSession, args: argparse.Namespace) -> dict:
 
     total_files = 0
     total_duplicates = 0
+    total_skipped_messages = 0
     per_mailbox_counts: dict[str, int] = {}
 
     for mailbox in args.senders:
@@ -422,58 +470,84 @@ def run_export(session: GraphSession, args: argparse.Namespace) -> dict:
         if sp_base_folder_id:
             sp_mailbox_folder_id = get_or_create_child_folder(session, sp_drive_id, sp_base_folder_id, mailbox_slug)
 
+        # Messages deja traites lors d'un run precedent (persiste sur SharePoint,
+        # au meme endroit que les pieces jointes de cette boite) : on les saute
+        # sans meme relister leurs pieces jointes, pour reprendre rapidement la
+        # ou un run precedent a ete coupe (ex: limite de 6h de GitHub Actions).
+        processed_ids: set = set()
+        if sp_mailbox_folder_id:
+            processed_ids = download_processed_log(session, sp_drive_id, sp_mailbox_folder_id)
+            if processed_ids:
+                print(f"  {len(processed_ids)} message(s) deja traites lors d'un run precedent (repris du log).")
+        newly_processed_since_save = 0
+
         messages = list_all_messages_with_attachments(session, mailbox)
         print(f"{len(messages)} email(s) avec piece(s) jointe(s) dans cette boite (envoi + reception).")
 
         for msg in messages:
+            if msg["id"] in processed_ids:
+                total_skipped_messages += 1
+                continue
+
             subject = msg.get("subject") or "(sans objet)"
             received = (msg.get("receivedDateTime") or "")[:10]
             attachments = list_attachments(session, mailbox, msg["id"])
             file_attachments = [a for a in attachments if a.get("@odata.type") == "#microsoft.graph.fileAttachment"]
 
-            if not file_attachments:
-                continue
+            if file_attachments:
+                print(f"  [{received}] {subject} - {len(file_attachments)} piece(s) jointe(s)")
 
-            print(f"  [{received}] {subject} - {len(file_attachments)} piece(s) jointe(s)")
+                year = received[:4] if len(received) >= 7 else "date_inconnue"
+                month = received[5:7] if len(received) >= 7 else "date_inconnue"
 
-            year = received[:4] if len(received) >= 7 else "date_inconnue"
-            month = received[5:7] if len(received) >= 7 else "date_inconnue"
+                for att in file_attachments:
+                    name = att.get("name") or f"piece_jointe_{att['id']}"
+                    filename = build_filename(received, subject, name)
 
-            for att in file_attachments:
-                name = att.get("name") or f"piece_jointe_{att['id']}"
-                filename = build_filename(received, subject, name)
+                    content = download_attachment_bytes(session, mailbox, msg["id"], att["id"])
+                    content_hash = hashlib.sha256(content).hexdigest()
 
-                content = download_attachment_bytes(session, mailbox, msg["id"], att["id"])
-                content_hash = hashlib.sha256(content).hexdigest()
+                    if content_hash in seen_hashes:
+                        total_duplicates += 1
+                        print(f"    -> doublon ignore (deja recupere dans cette boite): {name}")
+                        continue
+                    seen_hashes.add(content_hash)
 
-                if content_hash in seen_hashes:
-                    total_duplicates += 1
-                    print(f"    -> doublon ignore (deja recupere dans cette boite): {name}")
-                    continue
-                seen_hashes.add(content_hash)
+                    local_dir = output_root / mailbox_slug / year / month
+                    local_dir.mkdir(parents=True, exist_ok=True)
+                    dest = unique_path(local_dir / filename)
+                    dest.write_bytes(content)
+                    total_files += 1
+                    per_mailbox_counts[mailbox] += 1
+                    print(f"    -> local: {dest}")
 
-                local_dir = output_root / mailbox_slug / year / month
-                local_dir.mkdir(parents=True, exist_ok=True)
-                dest = unique_path(local_dir / filename)
-                dest.write_bytes(content)
-                total_files += 1
-                per_mailbox_counts[mailbox] += 1
-                print(f"    -> local: {dest}")
+                    if sp_mailbox_folder_id:
+                        sp_month_folder_id = get_year_month_folder(session, sp_drive_id, sp_mailbox_folder_id, year, month, sp_folder_cache)
+                        upload_file_to_sharepoint(session, sp_drive_id, sp_month_folder_id, filename, content)
+                        print(f"    -> SharePoint: {mailbox_slug}/{year}/{month}/{filename}")
 
-                if sp_mailbox_folder_id:
-                    sp_month_folder_id = get_year_month_folder(session, sp_drive_id, sp_mailbox_folder_id, year, month, sp_folder_cache)
-                    upload_file_to_sharepoint(session, sp_drive_id, sp_month_folder_id, filename, content)
-                    print(f"    -> SharePoint: {mailbox_slug}/{year}/{month}/{filename}")
+            processed_ids.add(msg["id"])
+            newly_processed_since_save += 1
+
+            if sp_mailbox_folder_id and newly_processed_since_save >= LOG_SAVE_EVERY:
+                upload_processed_log(session, sp_drive_id, sp_mailbox_folder_id, processed_ids)
+                newly_processed_since_save = 0
+
+        if sp_mailbox_folder_id and newly_processed_since_save > 0:
+            upload_processed_log(session, sp_drive_id, sp_mailbox_folder_id, processed_ids)
 
     print(f"\nTermine. {total_files} piece(s) jointe(s) enregistree(s) dans {output_root.resolve()}")
     if total_duplicates:
         print(f"{total_duplicates} doublon(s) detecte(s) et ignore(s) (meme contenu deja enregistre dans la meme boite).")
+    if total_skipped_messages:
+        print(f"{total_skipped_messages} message(s) deja traites lors d'un run precedent, sautes.")
     if sp_drive_id:
         print("Egalement deposees sur SharePoint, classees par sous-dossiers personne/annee/mois.")
 
     return {
         "total_files": total_files,
         "total_duplicates": total_duplicates,
+        "total_skipped_messages": total_skipped_messages,
         "per_mailbox_counts": per_mailbox_counts,
         "sharepoint_used": bool(sp_drive_id),
     }
@@ -484,6 +558,8 @@ def build_summary_text(stats: dict) -> str:
     lines.append(f"Total : {stats['total_files']} piece(s) jointe(s) enregistree(s).")
     if stats["total_duplicates"]:
         lines.append(f"Doublons ignores : {stats['total_duplicates']}.")
+    if stats.get("total_skipped_messages"):
+        lines.append(f"Messages deja traites lors d'un run precedent (repris du log) : {stats['total_skipped_messages']}.")
     lines.append("")
     lines.append("Detail par personne :")
     for mailbox, count in stats["per_mailbox_counts"].items():

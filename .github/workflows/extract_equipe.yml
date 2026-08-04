@@ -9,8 +9,39 @@ on:
         default: ""
 
 jobs:
-  extract-equipe:
+  # Construit la liste des boites a traiter (celle fournie, ou la liste par
+  # defaut du script) et l'expose au format JSON attendu par une matrice
+  # GitHub Actions.
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      senders_json: ${{ steps.build.outputs.senders_json }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Construire la liste des boites (JSON pour la matrice)
+        id: build
+        run: |
+          if [ -n "${{ inputs.senders }}" ]; then
+            SENDERS="${{ inputs.senders }}"
+          else
+            # Doit rester synchronise avec DEFAULT_SENDERS dans extract_equipe.py
+            SENDERS="mickael.consultant@madavance.org admin@madavance.org olivia@madavance.org rakitrynyavo@madavance.org holisoa.raharijaona@madavance.org eddy.rajaonarivony@madavance.org"
+          fi
+          JSON=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1].split()))" "$SENDERS")
+          echo "senders_json=$JSON" >> "$GITHUB_OUTPUT"
+
+  # Un job independant par boite, tous lancent en parallele : chaque boite
+  # dispose de ses propres 6h (limite dure GitHub Actions par job), au lieu
+  # de partager un seul budget de 6h pour les 6 boites a la suite.
+  extract-equipe:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sender: ${{ fromJson(needs.prepare.outputs.senders_json) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Extract all attachments per person (no filter)
+      - name: Extract all attachments (no filter) - ${{ matrix.sender }}
         env:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -32,15 +63,11 @@ jobs:
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
         run: |
-          SENDERS_ARGS=""
-          if [ -n "${{ inputs.senders }}" ]; then
-            SENDERS_ARGS="--senders ${{ inputs.senders }}"
-          fi
-          python extract_equipe.py $SENDERS_ARGS
+          python extract_equipe.py --senders "${{ matrix.sender }}"
 
       - name: Upload as artifact (copie temporaire de secours)
         uses: actions/upload-artifact@v4
         with:
-          name: pieces-jointes-equipe
+          name: pieces-jointes-equipe-${{ matrix.sender }}
           path: ./pieces_jointes_equipe
           retention-days: 7

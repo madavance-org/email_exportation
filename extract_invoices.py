@@ -445,8 +445,8 @@ def run_extraction(session: GraphSession, mode: str, senders: list[str], output_
 
                 if sp_folder_id:
                     sp_month_folder_id = get_year_month_folder(session, sp_drive_id, sp_folder_id, year, month, sp_folder_cache)
-                    upload_file_to_sharepoint(session, sp_drive_id, sp_month_folder_id, filename, content)
-                    print(f"    -> SharePoint: {year}/{month}/{filename}")
+                    upload_file_to_sharepoint(session, sp_drive_id, sp_month_folder_id, dest.name, content)
+                    print(f"    -> SharePoint: {year}/{month}/{dest.name}")
 
     print(f"\nTermine. {total_files} piece(s) jointe(s) enregistree(s) dans {output_root.resolve()}")
     if total_duplicates:

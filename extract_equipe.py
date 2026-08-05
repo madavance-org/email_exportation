@@ -523,8 +523,8 @@ def run_export(session: GraphSession, args: argparse.Namespace) -> dict:
 
                     if sp_mailbox_folder_id:
                         sp_month_folder_id = get_year_month_folder(session, sp_drive_id, sp_mailbox_folder_id, year, month, sp_folder_cache)
-                        upload_file_to_sharepoint(session, sp_drive_id, sp_month_folder_id, filename, content)
-                        print(f"    -> SharePoint: {mailbox_slug}/{year}/{month}/{filename}")
+                        upload_file_to_sharepoint(session, sp_drive_id, sp_month_folder_id, dest.name, content)
+                        print(f"    -> SharePoint: {mailbox_slug}/{year}/{month}/{dest.name}")
 
             processed_ids.add(msg["id"])
             newly_processed_since_save += 1

@@ -101,6 +101,36 @@ def request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
         attempt += 1
 
 
+MAX_UPLOAD_LOCK_RETRIES = 5
+UPLOAD_LOCK_RETRY_DELAYS = [15, 30, 60, 90, 120]  # secondes
+
+
+def create_upload_session_with_retry(session: GraphSession, url: str) -> requests.Response:
+    """Cree une upload session SharePoint, en retentant si Graph renvoie un 409
+    'nameAlreadyExists : A file with the same name is currently being uploaded'.
+
+    Ce cas n'est pas une vraie collision de nom (conflictBehavior=replace gere
+    deja le remplacement d'un fichier existant) : c'est un verrou temporaire
+    laisse par une precedente tentative d'upload sur ce meme chemin, interrompue
+    avant d'avoir termine (job annule ou relance en cours d'upload). Ce verrou
+    expire de lui-meme cote SharePoint apres un moment -- on retente avec un
+    delai croissant plutot que de faire planter tout le run."""
+    for attempt in range(MAX_UPLOAD_LOCK_RETRIES + 1):
+        resp = session.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={"item": {"@microsoft.graph.conflictBehavior": "replace"}},
+            timeout=30,
+        )
+        is_upload_lock = resp.status_code == 409 and "currently being uploaded" in resp.text
+        if not is_upload_lock or attempt >= MAX_UPLOAD_LOCK_RETRIES:
+            raise_for_status_verbose(resp)
+            return resp
+        delay = UPLOAD_LOCK_RETRY_DELAYS[attempt]
+        print(f"    (fichier deja en cours d'upload par une precedente tentative, nouvel essai dans {delay}s...)")
+        time.sleep(delay)
+
+
 class GraphSession:
     def __init__(self, tenant_id: str, client_id: str, client_secret: str):
         self.tenant_id = tenant_id
@@ -286,9 +316,7 @@ def get_year_month_folder(session, drive_id, base_folder_id, year, month, cache)
 def upload_file_to_sharepoint(session, drive_id, parent_item_id, filename, content):
     safe_name = quote(filename)
     url = f"{GRAPH_BASE}/drives/{drive_id}/items/{parent_item_id}:/{safe_name}:/createUploadSession"
-    resp = session.post(url, headers={"Content-Type": "application/json"},
-                         json={"item": {"@microsoft.graph.conflictBehavior": "replace"}}, timeout=30)
-    raise_for_status_verbose(resp)
+    resp = create_upload_session_with_retry(session, url)
     upload_url = resp.json()["uploadUrl"]
     total = len(content)
     start = 0

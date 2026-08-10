@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       senders:
-        description: "Adresse(s) email a interroger (separees par des espaces). Vide = liste par defaut (6 boites)."
+        description: "Adresse(s) email a interroger (separees par des espaces). Vide = liste par defaut (7 boites)."
         required: false
         default: ""
 
@@ -27,7 +27,7 @@ jobs:
             SENDERS="${{ inputs.senders }}"
           else
             # Doit rester synchronise avec DEFAULT_SENDERS dans extract_equipe.py
-            SENDERS="mickael.consultant@madavance.org admin@madavance.org olivia@madavance.org rakitrynyavo@madavance.org holisoa.raharijaona@madavance.org eddy.rajaonarivony@madavance.org"
+            SENDERS="comptable@madavance.org mickael.consultant@madavance.org admin@madavance.org olivia@madavance.org rakitrynyavo@madavance.org holisoa.raharijaona@madavance.org eddy.rajaonarivony@madavance.org"
           fi
           JSON=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1].split()))" "$SENDERS")
           echo "senders_json=$JSON" >> "$GITHUB_OUTPUT"

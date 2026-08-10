@@ -74,7 +74,7 @@ LOG_SAVE_EVERY = 10
 # Union des adresses deja utilisees comme DEFAULT_SENDERS dans les autres
 # scripts du repo (OV, Factures/Proforma, Banque, Decaissement, MVOLA, PJ).
 DEFAULT_SENDERS = [
-    "comptable@mdavance.org",
+    "comptable@madavance.org",
     "mickael.consultant@madavance.org",
     "admin@madavance.org",
     "olivia@madavance.org",

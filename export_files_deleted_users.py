@@ -18,6 +18,13 @@ de la liste renvoie une erreur (mailbox non provisionnee, inactive, etc.),
 on logue et on passe a la boite suivante plutot que de faire echouer tout le
 run.
 
+Reprise (13/08/2026, meme principe que extract_equipe.py) : avec 78 boites a
+scanner, un run peut etre coupe avant la fin (limite GitHub Actions, etc.).
+Un log JSON (processed_log.json, "mailbox::message_id" par ligne) est depose
+a la racine du dossier SharePoint cible, mis a jour tous les
+LOG_SAVE_EVERY messages traites -- le run suivant saute directement les
+messages deja vus, sans meme relister leurs pieces jointes.
+
 Cibles par defaut : la liste des comptes staff avec licence (~78, voir
 DEFAULT_SENDERS) -- pas les comptes invites externes ni les comptes sans
 licence (constate le 13/08/2026 : renvoient 404 MailboxNotEnabledForRESTAPI).
@@ -37,6 +44,7 @@ Usage :
 import argparse
 import base64
 import hashlib
+import json
 import os
 import re
 import sys
@@ -52,6 +60,14 @@ import requests
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 TARGET_ADDRESSES = {"eddy.rajaonarivony@madavance.org", "fara@madavance.org"}
+
+# Log de reprise, depose a la racine du dossier SharePoint cible (voir
+# download_processed_log/upload_processed_log). Cle composite "mailbox::id"
+# car ce script partage UN SEUL dossier de destination entre toutes les
+# boites scannees (contrairement a extract_equipe.py qui a un sous-dossier
+# par personne, donc un log par personne).
+LOG_FILENAME = "processed_log.json"
+LOG_SAVE_EVERY = 10
 
 # Comptes staff MadAvance avec une licence Microsoft 365 (donc une vraie
 # boite Exchange), constate le 13/08/2026 via Graph (userType=Member ET
@@ -342,6 +358,42 @@ def get_year_month_folder(session, drive_id, base_folder_id, year, month, cache)
     return month_folder_id
 
 
+def get_child_item_id(session: GraphSession, drive_id: str, parent_item_id: str, name: str) -> str | None:
+    """Trouve l'id d'un enfant (fichier ou dossier) par nom, ou None s'il n'existe pas."""
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{parent_item_id}/children"
+    resp = session.get(url, params={"$select": "id,name"}, timeout=30)
+    raise_for_status_verbose(resp)
+    for item in resp.json().get("value", []):
+        if item.get("name") == name:
+            return item["id"]
+    return None
+
+
+def download_processed_log(session: GraphSession, drive_id: str, folder_id: str) -> set:
+    """Cles 'mailbox::message_id' deja traitees, depuis le log JSON depose a la
+    racine du dossier cible. Ensemble vide si le fichier n'existe pas encore
+    (premier run)."""
+    item_id = get_child_item_id(session, drive_id, folder_id, LOG_FILENAME)
+    if item_id is None:
+        return set()
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/content"
+    resp = session.get(url, timeout=30)
+    raise_for_status_verbose(resp)
+    try:
+        return set(resp.json().get("processed_keys", []))
+    except ValueError:
+        return set()
+
+
+def upload_processed_log(session: GraphSession, drive_id: str, folder_id: str, processed_keys: set) -> None:
+    """Ecrit/ecrase le log JSON des messages traites, a la racine du dossier cible."""
+    safe_name = quote(LOG_FILENAME)
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}:/{safe_name}:/content"
+    payload = json.dumps({"processed_keys": sorted(processed_keys)}, indent=2).encode("utf-8")
+    resp = session.request("PUT", url, headers={"Content-Type": "application/json"}, data=payload, timeout=30)
+    raise_for_status_verbose(resp)
+
+
 MAX_UPLOAD_LOCK_RETRIES = 5
 UPLOAD_LOCK_RETRY_DELAYS = [15, 30, 60, 90, 120]  # secondes
 
@@ -426,8 +478,18 @@ def run_extraction(session: GraphSession, senders: list[str], output_dir: str, s
     sp_folder_cache: dict = {}
     total_files = 0
     total_duplicates = 0
+    total_skipped_messages = 0
     per_mailbox_counts: dict[str, int] = {}
     skipped_mailboxes: list[dict] = []
+
+    # Reprise (voir docstring) : cle "mailbox::message_id" deja traitee lors
+    # d'un run precedent -> on la saute sans meme relister ses pieces jointes.
+    processed_keys: set = set()
+    if sp_folder_id:
+        processed_keys = download_processed_log(session, sp_drive_id, sp_folder_id)
+        if processed_keys:
+            print(f"{len(processed_keys)} message(s) deja traites lors d'un run precedent (repris du log).")
+    newly_processed_since_save = 0
 
     for mailbox in senders:
         print(f"\n--- Boite : {mailbox} ---")
@@ -445,6 +507,11 @@ def run_extraction(session: GraphSession, senders: list[str], output_dir: str, s
             if not is_target_message(msg, targets):
                 continue
 
+            key = f"{mailbox}::{msg['id']}"
+            if key in processed_keys:
+                total_skipped_messages += 1
+                continue
+
             sender_address = ((msg.get("from") or {}).get("emailAddress") or {}).get("address") or ""
             subject = msg.get("subject") or "(sans objet)"
             received = (msg.get("receivedDateTime") or "")[:10]
@@ -456,6 +523,8 @@ def run_extraction(session: GraphSession, senders: list[str], output_dir: str, s
                 continue
             file_attachments = [a for a in attachments if a.get("@odata.type") == "#microsoft.graph.fileAttachment"]
             if not file_attachments:
+                processed_keys.add(key)
+                newly_processed_since_save += 1
                 continue
 
             print(f"  [{received}] {subject} ({sender_address}) - {len(file_attachments)} piece(s) jointe(s)")
@@ -486,14 +555,27 @@ def run_extraction(session: GraphSession, senders: list[str], output_dir: str, s
                     upload_file_to_sharepoint(session, sp_drive_id, sp_month_folder_id, dest.name, content)
                     print(f"    -> SharePoint: {year}/{month}/{dest.name}")
 
+            processed_keys.add(key)
+            newly_processed_since_save += 1
+
+            if sp_folder_id and newly_processed_since_save >= LOG_SAVE_EVERY:
+                upload_processed_log(session, sp_drive_id, sp_folder_id, processed_keys)
+                newly_processed_since_save = 0
+
+    if sp_folder_id and newly_processed_since_save > 0:
+        upload_processed_log(session, sp_drive_id, sp_folder_id, processed_keys)
+
     print(f"\nTermine. {total_files} piece(s) jointe(s) enregistree(s) dans {output_root.resolve()}")
     if total_duplicates:
         print(f"{total_duplicates} doublon(s) ignore(s).")
+    if total_skipped_messages:
+        print(f"{total_skipped_messages} message(s) deja traites lors d'un run precedent, sautes.")
     if skipped_mailboxes:
         print(f"{len(skipped_mailboxes)} boite(s) ignoree(s) (erreur) : " + ", ".join(s["mailbox"] for s in skipped_mailboxes))
     return {
         "total_files": total_files,
         "total_duplicates": total_duplicates,
+        "total_skipped_messages": total_skipped_messages,
         "per_mailbox_counts": per_mailbox_counts,
         "sharepoint_used": bool(sp_drive_id),
         "skipped_mailboxes": skipped_mailboxes,
@@ -505,6 +587,8 @@ def build_summary_text(stats: dict) -> str:
     lines.append(f"Total : {stats['total_files']} piece(s) jointe(s) enregistree(s).")
     if stats["total_duplicates"]:
         lines.append(f"Doublons ignores : {stats['total_duplicates']}.")
+    if stats["total_skipped_messages"]:
+        lines.append(f"Messages deja traites lors d'un run precedent (repris du log) : {stats['total_skipped_messages']}.")
     lines.append("")
     lines.append("Detail par boite (uniquement celles avec au moins 1 resultat) :")
     for mailbox, count in stats["per_mailbox_counts"].items():

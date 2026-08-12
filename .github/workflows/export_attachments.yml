@@ -7,6 +7,11 @@ on:
         description: "Adresse(s) email dont on interroge directement la boite (separees par des espaces)."
         required: false
         default: "eddy.rajaonarivony@madavance.org"
+  schedule:
+    # Chaque jour a 03:00 UTC (06:00 heure de Madagascar). Le declenchement
+    # programme n'a pas acces aux "inputs" du formulaire manuel -> fallback
+    # sur la liste par defaut du script (voir logique SENDERS_ARGS ci-dessous).
+    - cron: "0 3 * * *"
 
 jobs:
   extract-attachments:

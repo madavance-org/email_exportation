@@ -12,10 +12,11 @@ on:
         required: false
         default: "OV"
   schedule:
-    # Chaque lundi a 06:00 UTC. Le declenchement programme n'a pas acces aux
-    # "inputs" du formulaire manuel -> on utilise les valeurs par defaut du
-    # script (les 3 boites, mot-cle "OV") via le fallback ci-dessous.
-    - cron: "0 6 * * 1"
+    # Chaque jour a 03:00 UTC (06:00 heure de Madagascar). Le declenchement
+    # programme n'a pas acces aux "inputs" du formulaire manuel -> on utilise
+    # les valeurs par defaut du script (les 3 boites, mot-cle "OV") via le
+    # fallback ci-dessous.
+    - cron: "0 3 * * *"
 
 jobs:
   extract-ov:

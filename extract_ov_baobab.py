@@ -5,13 +5,16 @@ extract_ov_baobab.py -- "Extraction OV x BAOBAB"
 Flow separe (dossier SharePoint et script dedies) : INTERSECTION des filtres
 OV (extract_attachments.py) et BAOBAB (extract_baobab.py). Un message doit
 satisfaire LES DEUX conditions :
-    - expediteur BAOBAB : mgildas@baobab.com, uraharitiana@baobab.com, ou
-      toute autre adresse se terminant par "@baobab.com" ;
-    - contenu OV : objet ou nom de piece jointe avec le token "OV" (avec
-      eventuels chiffres a la suite, ex "OV12"), ou objet contenant "virement"
+    - signal BAOBAB : expediteur mgildas@baobab.com, uraharitiana@baobab.com,
+      ou toute autre adresse se terminant par "@baobab.com" ; OU mot "BAOBAB"
+      dans l'objet/nom de fichier (ajoute le 13/08/2026 -- certains OV lies a
+      BAOBAB sont envoyes en interne, ex: par eddy.rajaonarivony@madavance.org,
+      sans expediteur @baobab.com) ;
+    - signal OV : objet ou nom de piece jointe avec le token "OV" (avec
+      eventuels chiffres a la suite, ex "OV12"), ou "virement"
       (memes regles que extract_attachments.py / DEFAULT_KEYWORD="OV").
 
-Autrement dit : les Ordres de Virement envoyes par BAOBAB, uniquement.
+Autrement dit : les Ordres de Virement lies a BAOBAB.
 
 Cibles par defaut : olivia@madavance.org et rakitrynyavo@madavance.org
 (memes boites que les deux scripts source). Modifiable via --senders.
@@ -340,15 +343,22 @@ def is_baobab_sender(sender_address: str) -> bool:
     return addr in BAOBAB_EXACT_SENDERS or addr.endswith(BAOBAB_DOMAIN_SUFFIX)
 
 
+def is_baobab_text(text: str) -> bool:
+    """Deuxieme signal BAOBAB (13/08/2026) : mot 'baobab' dans objet/nom de
+    fichier, pour les OV envoyes en interne (ex: par Eddy) sans expediteur
+    @baobab.com. Voir aussi extract_baobab.py."""
+    return "baobab" in normalize_text(text)
+
+
 def run_extraction(session: GraphSession, senders: list[str], output_dir: str, sharepoint_link: str | None) -> dict:
     ov_matches = make_keyword_matcher(OV_KEYWORD)
 
     def ov_content_matches(text: str) -> bool:
         return ov_matches(text) or "virement" in normalize_text(text)
 
-    print(f"Filtre actif (intersection) : expediteur BAOBAB (egal a {sorted(BAOBAB_EXACT_SENDERS)} ou "
-          f"terminant par '{BAOBAB_DOMAIN_SUFFIX}') ET contenu OV (objet/nom de fichier avec le token "
-          f"'{OV_KEYWORD}' ou contenant 'virement').")
+    print(f"Filtre actif (intersection) : signal BAOBAB (expediteur egal a {sorted(BAOBAB_EXACT_SENDERS)} ou "
+          f"terminant par '{BAOBAB_DOMAIN_SUFFIX}', OU 'baobab' dans objet/nom de fichier) ET signal OV "
+          f"(objet/nom de fichier avec le token '{OV_KEYWORD}' ou contenant 'virement').")
 
     sp_drive_id = sp_folder_id = None
     if sharepoint_link:
@@ -373,18 +383,24 @@ def run_extraction(session: GraphSession, senders: list[str], output_dir: str, s
 
         for msg in messages:
             sender_address = ((msg.get("from") or {}).get("emailAddress") or {}).get("address") or ""
-            if not is_baobab_sender(sender_address):
-                continue
-
             subject = msg.get("subject") or "(sans objet)"
             received = (msg.get("receivedDateTime") or "")[:10]
+
+            subject_baobab = is_baobab_sender(sender_address) or is_baobab_text(subject)
+            subject_ov = ov_content_matches(subject)
+
             attachments = list_attachments(session, mailbox, msg["id"])
             file_attachments = [a for a in attachments if a.get("@odata.type") == "#microsoft.graph.fileAttachment"]
             if not file_attachments:
                 continue
 
-            subject_matches = ov_content_matches(subject)
-            kept = [a for a in file_attachments if subject_matches or ov_content_matches(a.get("name") or "")]
+            kept = []
+            for a in file_attachments:
+                name = a.get("name") or ""
+                baobab_ok = subject_baobab or is_baobab_text(name)
+                ov_ok = subject_ov or ov_content_matches(name)
+                if baobab_ok and ov_ok:
+                    kept.append(a)
             if not kept:
                 continue
 

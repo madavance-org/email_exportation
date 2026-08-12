@@ -3,16 +3,21 @@
 extract_baobab.py -- "Extraction BAOBAB"
 
 Flow separe (dossier SharePoint et script dedies), sur le meme principe que
-extract_banque.py / extract_mvola.py, mais filtre par EXPEDITEUR uniquement
-(pas de mot-cle sur objet/nom de fichier) : TOUTES les pieces jointes des
-emails envoyes par quelqu'un chez BAOBAB.
+extract_banque.py / extract_mvola.py. Un message declenche l'extraction de
+ses pieces jointes (TOUTES, pas de filtre supplementaire) s'il satisfait au
+moins UN des deux signaux suivants :
 
-Le filtre declenche si l'expediteur du message est :
-    - mgildas@baobab.com
-    - uraharitiana@baobab.com
-    - ou toute autre adresse se terminant par "@baobab.com"
-(les deux premiers cas sont deja couverts par le suffixe de domaine ; ils
-restent listes explicitement pour documenter l'intention).
+  1. Expediteur BAOBAB :
+     - mgildas@baobab.com
+     - uraharitiana@baobab.com
+     - ou toute autre adresse se terminant par "@baobab.com"
+     (les deux premiers cas sont deja couverts par le suffixe de domaine ;
+     ils restent listes explicitement pour documenter l'intention).
+
+  2. Mot "BAOBAB" dans l'objet ou le nom de piece jointe (insensible a la
+     casse/accents) -- ajoute le 13/08/2026 : certains OV lies a BAOBAB sont
+     envoyes en interne (ex: par eddy.rajaonarivony@madavance.org) sans que
+     l'expediteur soit lui-meme chez BAOBAB.
 
 Cibles par defaut : olivia@madavance.org et rakitrynyavo@madavance.org
 (boites ou la correspondance BAOBAB est geree). Modifiable via --senders.
@@ -186,6 +191,10 @@ def slugify(value: str, max_len: int = 60) -> str:
     return value[:max_len] or "sans_nom"
 
 
+def normalize_text(value: str) -> str:
+    return unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode("ascii").lower()
+
+
 def build_filename(received: str, subject: str, original_name: str, max_stem_len: int = 60) -> str:
     base_name, dot, ext = original_name.rpartition(".")
     stem_source = base_name if dot else original_name
@@ -320,10 +329,18 @@ def is_baobab_sender(sender_address: str) -> bool:
     return addr in BAOBAB_EXACT_SENDERS or addr.endswith(BAOBAB_DOMAIN_SUFFIX)
 
 
+def is_baobab_text(text: str) -> bool:
+    """Deuxieme signal (13/08/2026) : certains OV lies a BAOBAB sont envoyes en
+    interne (ex: par eddy.rajaonarivony@madavance.org) et ne portent le mot
+    'BAOBAB' que dans l'objet ou le nom de piece jointe -- pas d'expediteur
+    @baobab.com dans ce cas. D'ou ce deuxieme critere, en OU avec
+    is_baobab_sender()."""
+    return "baobab" in normalize_text(text)
+
+
 def run_extraction(session: GraphSession, senders: list[str], output_dir: str, sharepoint_link: str | None) -> dict:
     print(f"Filtre actif : expediteur egal a {sorted(BAOBAB_EXACT_SENDERS)} ou se terminant par "
-          f"'{BAOBAB_DOMAIN_SUFFIX}' (pas de filtre sur objet/nom de fichier -- toutes les pieces "
-          f"jointes de ces messages sont extraites).")
+          f"'{BAOBAB_DOMAIN_SUFFIX}', OU objet/nom de fichier contenant 'baobab'.")
 
     sp_drive_id = sp_folder_id = None
     if sharepoint_link:
@@ -348,21 +365,24 @@ def run_extraction(session: GraphSession, senders: list[str], output_dir: str, s
 
         for msg in messages:
             sender_address = ((msg.get("from") or {}).get("emailAddress") or {}).get("address") or ""
-            if not is_baobab_sender(sender_address):
-                continue
-
             subject = msg.get("subject") or "(sans objet)"
+            subject_matches = is_baobab_sender(sender_address) or is_baobab_text(subject)
+
             received = (msg.get("receivedDateTime") or "")[:10]
             attachments = list_attachments(session, mailbox, msg["id"])
             file_attachments = [a for a in attachments if a.get("@odata.type") == "#microsoft.graph.fileAttachment"]
             if not file_attachments:
                 continue
 
-            print(f"  [{received}] {subject} ({sender_address}) - {len(file_attachments)} piece(s) jointe(s)")
+            kept = [a for a in file_attachments if subject_matches or is_baobab_text(a.get("name") or "")]
+            if not kept:
+                continue
+
+            print(f"  [{received}] {subject} ({sender_address}) - {len(kept)}/{len(file_attachments)} piece(s) jointe(s) retenue(s)")
             year = received[:4] if len(received) >= 7 else "date_inconnue"
             month = received[5:7] if len(received) >= 7 else "date_inconnue"
 
-            for att in file_attachments:
+            for att in kept:
                 name = att.get("name") or f"piece_jointe_{att['id']}"
                 filename = build_filename(received, subject, name)
                 content = download_attachment_bytes(session, mailbox, msg["id"], att["id"])

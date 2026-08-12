@@ -1,0 +1,51 @@
+name: export_files_deleted_users
+
+on:
+  workflow_dispatch:
+    inputs:
+      senders:
+        description: "Boite(s) mail a scanner (separees par des espaces). Vide = liste complete du staff licencie par defaut."
+        required: false
+        default: ""
+  schedule:
+    # Chaque jour a 03:00 UTC (06:00 heure de Madagascar). Le declenchement
+    # programme n'a pas acces aux "inputs" du formulaire manuel -> fallback
+    # sur la liste par defaut du script (voir logique SENDERS_ARGS ci-dessous).
+    - cron: "0 3 * * *"
+
+jobs:
+  export-files-deleted-users:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Export files (deleted users)
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SHAREPOINT_FOLDER_LINK_DELETED_USERS: ${{ secrets.SHAREPOINT_FOLDER_LINK_DELETED_USERS }}
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
+        run: |
+          SENDERS_ARGS=""
+          if [ -n "${{ inputs.senders }}" ]; then
+            SENDERS_ARGS="--senders ${{ inputs.senders }}"
+          fi
+          python export_files_deleted_users.py $SENDERS_ARGS
+
+      - name: Upload as artifact (copie temporaire de secours)
+        uses: actions/upload-artifact@v4
+        with:
+          name: deleted-users-extraits
+          path: ./deleted_users
+          retention-days: 7

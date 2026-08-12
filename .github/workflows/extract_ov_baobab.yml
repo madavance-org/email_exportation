@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       senders:
-        description: "Boite(s) mail a scanner (separees par des espaces). Vide = olivia@madavance.org par defaut."
+        description: "Boite(s) mail a scanner (separees par des espaces). Vide = olivia@madavance.org + rakitrynyavo@madavance.org par defaut."
         required: false
         default: ""
   schedule:

@@ -14,8 +14,8 @@ Le filtre declenche si l'expediteur du message est :
 (les deux premiers cas sont deja couverts par le suffixe de domaine ; ils
 restent listes explicitement pour documenter l'intention).
 
-Cible par defaut : olivia@madavance.org (boite ou la correspondance BAOBAB
-est geree). Modifiable via --senders.
+Cibles par defaut : olivia@madavance.org et rakitrynyavo@madavance.org
+(boites ou la correspondance BAOBAB est geree). Modifiable via --senders.
 
 Authentification identique aux autres scripts du repo (BackupOffice365,
 app-only) :
@@ -44,7 +44,7 @@ from urllib.parse import quote
 import requests
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
-DEFAULT_SENDERS = ["olivia@madavance.org"]
+DEFAULT_SENDERS = ["olivia@madavance.org", "rakitrynyavo@madavance.org"]
 BAOBAB_EXACT_SENDERS = {"mgildas@baobab.com", "uraharitiana@baobab.com"}
 BAOBAB_DOMAIN_SUFFIX = "@baobab.com"
 CHUNK_SIZE = 320 * 1024 * 30

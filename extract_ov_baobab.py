@@ -13,8 +13,8 @@ satisfaire LES DEUX conditions :
 
 Autrement dit : les Ordres de Virement envoyes par BAOBAB, uniquement.
 
-Cible par defaut : olivia@madavance.org (meme boite que les deux scripts
-source). Modifiable via --senders.
+Cibles par defaut : olivia@madavance.org et rakitrynyavo@madavance.org
+(memes boites que les deux scripts source). Modifiable via --senders.
 
 Authentification identique aux autres scripts du repo (BackupOffice365,
 app-only) :
@@ -43,7 +43,7 @@ from urllib.parse import quote
 import requests
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
-DEFAULT_SENDERS = ["olivia@madavance.org"]
+DEFAULT_SENDERS = ["olivia@madavance.org", "rakitrynyavo@madavance.org"]
 BAOBAB_EXACT_SENDERS = {"mgildas@baobab.com", "uraharitiana@baobab.com"}
 BAOBAB_DOMAIN_SUFFIX = "@baobab.com"
 OV_KEYWORD = "OV"

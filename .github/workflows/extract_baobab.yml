@@ -1,0 +1,51 @@
+name: Extraction BAOBAB
+
+on:
+  workflow_dispatch:
+    inputs:
+      senders:
+        description: "Boite(s) mail a scanner (separees par des espaces). Vide = olivia@madavance.org par defaut."
+        required: false
+        default: ""
+  schedule:
+    # Chaque jour a 03:00 UTC (06:00 heure de Madagascar). Le declenchement
+    # programme n'a pas acces aux "inputs" du formulaire manuel -> fallback
+    # sur la liste par defaut du script (voir logique SENDERS_ARGS ci-dessous).
+    - cron: "0 3 * * *"
+
+jobs:
+  extract-baobab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Extract BAOBAB
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SHAREPOINT_FOLDER_LINK_BAOBAB: ${{ secrets.SHAREPOINT_FOLDER_LINK_BAOBAB }}
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
+        run: |
+          SENDERS_ARGS=""
+          if [ -n "${{ inputs.senders }}" ]; then
+            SENDERS_ARGS="--senders ${{ inputs.senders }}"
+          fi
+          python extract_baobab.py $SENDERS_ARGS
+
+      - name: Upload as artifact (copie temporaire de secours)
+        uses: actions/upload-artifact@v4
+        with:
+          name: baobab-extraits
+          path: ./baobab
+          retention-days: 7

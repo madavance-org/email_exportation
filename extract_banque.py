@@ -47,7 +47,7 @@ import requests
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 DEFAULT_SENDERS = ["admin@madavance.org"]
 TOKEN_KEYWORDS = ["bancaire"]
-PHRASE_KEYWORDS = ["releve bancaire", "releve bq"]
+PHRASE_KEYWORDS = ["releve bancaire", "releve bq", "releve de compte"]
 CHUNK_SIZE = 320 * 1024 * 30
 TOKEN_REFRESH_MARGIN_SECONDS = 120
 TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}

@@ -20,10 +20,19 @@ run.
 
 Reprise (13/08/2026, meme principe que extract_equipe.py) : avec 78 boites a
 scanner, un run peut etre coupe avant la fin (limite GitHub Actions, etc.).
-Un log JSON (processed_log.json, "mailbox::message_id" par ligne) est depose
-a la racine du dossier SharePoint cible, mis a jour tous les
-LOG_SAVE_EVERY messages traites -- le run suivant saute directement les
-messages deja vus, sans meme relister leurs pieces jointes.
+Un log JSON par cible ("mailbox::message_id" par cle) est depose dans le
+sous-dossier SharePoint de CETTE cible, mis a jour tous les LOG_SAVE_EVERY
+messages traites -- le run suivant saute directement les messages deja vus.
+
+Rangement (14/08/2026) : les resultats sont deposes dans le sous-dossier de
+la personne concernee (eddy.rajaonarivony_madavance.org, fara_madavance.org
+-- meme nom que ceux crees par extract_equipe.py, donc fusion dans les memes
+dossiers) plutot que dans une arborescence annee/mois a part. Un message qui
+concerne les deux cibles a la fois (rare) est deplace dans les deux dossiers.
+Le nom du log ("processed_log_deleted_users.json") est volontairement
+different de celui d'extract_equipe.py ("processed_log.json") pour ne pas
+ecraser son propre suivi de reprise : les deux scripts partagent le dossier
+mais pas leur fichier de log.
 
 Cibles par defaut : la liste des comptes staff avec licence (~78, voir
 DEFAULT_SENDERS) -- pas les comptes invites externes ni les comptes sans
@@ -61,12 +70,13 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 TARGET_ADDRESSES = {"eddy.rajaonarivony@madavance.org", "fara@madavance.org"}
 
-# Log de reprise, depose a la racine du dossier SharePoint cible (voir
-# download_processed_log/upload_processed_log). Cle composite "mailbox::id"
-# car ce script partage UN SEUL dossier de destination entre toutes les
-# boites scannees (contrairement a extract_equipe.py qui a un sous-dossier
-# par personne, donc un log par personne).
-LOG_FILENAME = "processed_log.json"
+# Log de reprise, depose dans le sous-dossier SharePoint de CHAQUE cible (un
+# sous-dossier + un log par personne, meme principe que extract_equipe.py).
+# Cle composite "mailbox::id" car plusieurs boites source (parmi les ~78
+# scannees) peuvent chacune contenir un message concernant la meme cible.
+# Nom distinct de celui d'extract_equipe.py ("processed_log.json") pour ne
+# pas ecraser son log en partageant le meme dossier.
+LOG_FILENAME = "processed_log_deleted_users.json"
 LOG_SAVE_EVERY = 10
 
 # Comptes staff MadAvance avec une licence Microsoft 365 (donc une vraie
@@ -449,15 +459,19 @@ def send_email(session, sender, recipients, subject, body_text):
     print(f"Email envoye a {recipients} depuis {sender}.")
 
 
-def is_target_message(msg: dict, targets: set) -> bool:
-    from_addr = ((msg.get("from") or {}).get("emailAddress") or {}).get("address", "")
-    if from_addr.strip().lower() in targets:
-        return True
+def matched_targets(msg: dict, targets: set) -> set:
+    """Renvoie l'ensemble des adresses cibles (parmi targets) presentes en
+    expediteur ou destinataire (a/cc) de ce message. Un message peut
+    concerner plusieurs cibles a la fois (ex: Eddy ET Fara sur le meme fil)."""
+    found = set()
+    from_addr = ((msg.get("from") or {}).get("emailAddress") or {}).get("address", "").strip().lower()
+    if from_addr in targets:
+        found.add(from_addr)
     for r in (msg.get("toRecipients") or []) + (msg.get("ccRecipients") or []):
-        addr = (r.get("emailAddress") or {}).get("address", "")
-        if addr.strip().lower() in targets:
-            return True
-    return False
+        addr = (r.get("emailAddress") or {}).get("address", "").strip().lower()
+        if addr in targets:
+            found.add(addr)
+    return found
 
 
 def run_extraction(session: GraphSession, senders: list[str], output_dir: str, sharepoint_link: str | None) -> dict:
@@ -465,31 +479,45 @@ def run_extraction(session: GraphSession, senders: list[str], output_dir: str, s
     print(f"Filtre actif : {sorted(targets)} en expediteur OU destinataire (a/cc) -- pas de filtre "
           f"mot-cle, toutes les pieces jointes de ces messages sont extraites.")
 
-    sp_drive_id = sp_folder_id = None
+    sp_drive_id = sp_base_folder_id = None
     if sharepoint_link:
         print("Resolution du dossier SharePoint cible...")
-        sp_drive_id, sp_folder_id = resolve_share_link(session, sharepoint_link)
-        print(f"  -> driveId={sp_drive_id} folderId={sp_folder_id}")
+        sp_drive_id, sp_base_folder_id = resolve_share_link(session, sharepoint_link)
+        print(f"  -> driveId={sp_drive_id} folderId={sp_base_folder_id}")
 
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
 
-    seen_hashes: set = set()
-    sp_folder_cache: dict = {}
+    # Un etat par cible (Eddy, Fara) : son propre sous-dossier SharePoint
+    # (meme nom que celui cree par extract_equipe.py -- slugify de l'adresse
+    # -- donc fusion dans les memes dossiers par personne), son propre log de
+    # reprise et son propre dedoublonnage (comme extract_equipe.py qui
+    # dedoublonne par boite, pas globalement).
+    target_state: dict[str, dict] = {}
+    for target in sorted(targets):
+        slug = slugify(target, max_len=80)
+        sp_target_folder_id = None
+        if sp_base_folder_id:
+            sp_target_folder_id = get_or_create_child_folder(session, sp_drive_id, sp_base_folder_id, slug)
+        processed_keys: set = set()
+        if sp_target_folder_id:
+            processed_keys = download_processed_log(session, sp_drive_id, sp_target_folder_id)
+            if processed_keys:
+                print(f"  {slug} : {len(processed_keys)} message(s) deja traites lors d'un run precedent (repris du log).")
+        target_state[target] = {
+            "slug": slug,
+            "sp_folder_id": sp_target_folder_id,
+            "sp_folder_cache": {},
+            "processed_keys": processed_keys,
+            "newly_processed_since_save": 0,
+            "seen_hashes": set(),
+            "count": 0,
+        }
+
     total_files = 0
     total_duplicates = 0
     total_skipped_messages = 0
-    per_mailbox_counts: dict[str, int] = {}
     skipped_mailboxes: list[dict] = []
-
-    # Reprise (voir docstring) : cle "mailbox::message_id" deja traitee lors
-    # d'un run precedent -> on la saute sans meme relister ses pieces jointes.
-    processed_keys: set = set()
-    if sp_folder_id:
-        processed_keys = download_processed_log(session, sp_drive_id, sp_folder_id)
-        if processed_keys:
-            print(f"{len(processed_keys)} message(s) deja traites lors d'un run precedent (repris du log).")
-    newly_processed_since_save = 0
 
     for mailbox in senders:
         print(f"\n--- Boite : {mailbox} ---")
@@ -501,69 +529,79 @@ def run_extraction(session: GraphSession, senders: list[str], output_dir: str, s
             continue
 
         print(f"{len(messages)} email(s) avec piece(s) jointe(s) dans cette boite (envoi + reception).")
-        per_mailbox_counts[mailbox] = 0
 
         for msg in messages:
-            if not is_target_message(msg, targets):
-                continue
-
-            key = f"{mailbox}::{msg['id']}"
-            if key in processed_keys:
-                total_skipped_messages += 1
+            matched = matched_targets(msg, targets)
+            if not matched:
                 continue
 
             sender_address = ((msg.get("from") or {}).get("emailAddress") or {}).get("address") or ""
             subject = msg.get("subject") or "(sans objet)"
             received = (msg.get("receivedDateTime") or "")[:10]
-
-            try:
-                attachments = list_attachments(session, mailbox, msg["id"])
-            except Exception as exc:
-                print(f"  ! Pieces jointes ignorees pour {subject!r} ({exc})")
-                continue
-            file_attachments = [a for a in attachments if a.get("@odata.type") == "#microsoft.graph.fileAttachment"]
-            if not file_attachments:
-                processed_keys.add(key)
-                newly_processed_since_save += 1
-                continue
-
-            print(f"  [{received}] {subject} ({sender_address}) - {len(file_attachments)} piece(s) jointe(s)")
             year = received[:4] if len(received) >= 7 else "date_inconnue"
             month = received[5:7] if len(received) >= 7 else "date_inconnue"
 
-            for att in file_attachments:
-                name = att.get("name") or f"piece_jointe_{att['id']}"
-                filename = build_filename(received, subject, name)
-                content = download_attachment_bytes(session, mailbox, msg["id"], att["id"])
-                content_hash = hashlib.sha256(content).hexdigest()
-                if content_hash in seen_hashes:
-                    total_duplicates += 1
-                    print(f"    -> doublon ignore: {name}")
+            attachments_cache = None
+            for target in matched:
+                state = target_state[target]
+                key = f"{mailbox}::{msg['id']}"
+                if key in state["processed_keys"]:
+                    total_skipped_messages += 1
                     continue
-                seen_hashes.add(content_hash)
 
-                local_dir = output_root / year / month
-                local_dir.mkdir(parents=True, exist_ok=True)
-                dest = unique_path(local_dir / filename)
-                dest.write_bytes(content)
-                total_files += 1
-                per_mailbox_counts[mailbox] += 1
-                print(f"    -> local: {dest}")
+                if attachments_cache is None:
+                    try:
+                        attachments_cache = list_attachments(session, mailbox, msg["id"])
+                    except Exception as exc:
+                        print(f"  ! Pieces jointes ignorees pour {subject!r} ({exc})")
+                        attachments_cache = []
+                file_attachments = [a for a in attachments_cache if a.get("@odata.type") == "#microsoft.graph.fileAttachment"]
 
-                if sp_folder_id:
-                    sp_month_folder_id = get_year_month_folder(session, sp_drive_id, sp_folder_id, year, month, sp_folder_cache)
-                    upload_file_to_sharepoint(session, sp_drive_id, sp_month_folder_id, dest.name, content)
-                    print(f"    -> SharePoint: {year}/{month}/{dest.name}")
+                if not file_attachments:
+                    state["processed_keys"].add(key)
+                    state["newly_processed_since_save"] += 1
+                    continue
 
-            processed_keys.add(key)
-            newly_processed_since_save += 1
+                print(f"  [{received}] {subject} ({sender_address}) -> {state['slug']} - {len(file_attachments)} piece(s) jointe(s)")
 
-            if sp_folder_id and newly_processed_since_save >= LOG_SAVE_EVERY:
-                upload_processed_log(session, sp_drive_id, sp_folder_id, processed_keys)
-                newly_processed_since_save = 0
+                for att in file_attachments:
+                    name = att.get("name") or f"piece_jointe_{att['id']}"
+                    filename = build_filename(received, subject, name)
+                    content = download_attachment_bytes(session, mailbox, msg["id"], att["id"])
+                    content_hash = hashlib.sha256(content).hexdigest()
+                    if content_hash in state["seen_hashes"]:
+                        total_duplicates += 1
+                        print(f"    -> doublon ignore: {name}")
+                        continue
+                    state["seen_hashes"].add(content_hash)
 
-    if sp_folder_id and newly_processed_since_save > 0:
-        upload_processed_log(session, sp_drive_id, sp_folder_id, processed_keys)
+                    local_dir = output_root / state["slug"] / year / month
+                    local_dir.mkdir(parents=True, exist_ok=True)
+                    dest = unique_path(local_dir / filename)
+                    dest.write_bytes(content)
+                    total_files += 1
+                    state["count"] += 1
+                    print(f"    -> local: {dest}")
+
+                    if state["sp_folder_id"]:
+                        sp_month_folder_id = get_year_month_folder(
+                            session, sp_drive_id, state["sp_folder_id"], year, month, state["sp_folder_cache"]
+                        )
+                        upload_file_to_sharepoint(session, sp_drive_id, sp_month_folder_id, dest.name, content)
+                        print(f"    -> SharePoint: {state['slug']}/{year}/{month}/{dest.name}")
+
+                state["processed_keys"].add(key)
+                state["newly_processed_since_save"] += 1
+
+                if state["sp_folder_id"] and state["newly_processed_since_save"] >= LOG_SAVE_EVERY:
+                    upload_processed_log(session, sp_drive_id, state["sp_folder_id"], state["processed_keys"])
+                    state["newly_processed_since_save"] = 0
+
+    for state in target_state.values():
+        if state["sp_folder_id"] and state["newly_processed_since_save"] > 0:
+            upload_processed_log(session, sp_drive_id, state["sp_folder_id"], state["processed_keys"])
+
+    per_target_counts = {state["slug"]: state["count"] for state in target_state.values()}
 
     print(f"\nTermine. {total_files} piece(s) jointe(s) enregistree(s) dans {output_root.resolve()}")
     if total_duplicates:
@@ -576,7 +614,7 @@ def run_extraction(session: GraphSession, senders: list[str], output_dir: str, s
         "total_files": total_files,
         "total_duplicates": total_duplicates,
         "total_skipped_messages": total_skipped_messages,
-        "per_mailbox_counts": per_mailbox_counts,
+        "per_target_counts": per_target_counts,
         "sharepoint_used": bool(sp_drive_id),
         "skipped_mailboxes": skipped_mailboxes,
     }
@@ -590,10 +628,9 @@ def build_summary_text(stats: dict) -> str:
     if stats["total_skipped_messages"]:
         lines.append(f"Messages deja traites lors d'un run precedent (repris du log) : {stats['total_skipped_messages']}.")
     lines.append("")
-    lines.append("Detail par boite (uniquement celles avec au moins 1 resultat) :")
-    for mailbox, count in stats["per_mailbox_counts"].items():
-        if count:
-            lines.append(f"  - {mailbox} : {count} piece(s) jointe(s)")
+    lines.append("Detail par personne :")
+    for slug, count in stats["per_target_counts"].items():
+        lines.append(f"  - {slug} : {count} piece(s) jointe(s)")
     if stats["skipped_mailboxes"]:
         lines.append("")
         lines.append("Boites ignorees (erreur d'acces) :")
@@ -601,7 +638,7 @@ def build_summary_text(stats: dict) -> str:
             lines.append(f"  - {s['mailbox']} : {s['detail']}")
     if stats["sharepoint_used"]:
         lines.append("")
-        lines.append("Fichiers deposes sur SharePoint (classes par annee/mois).")
+        lines.append("Fichiers deposes sur SharePoint, dans le sous-dossier de chaque personne (classes par annee/mois).")
     return "\n".join(lines)
 
 

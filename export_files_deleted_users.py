@@ -2,15 +2,15 @@
 """
 export_files_deleted_users.py -- "Extraction utilisateurs partis"
 
-Contexte (13/08/2026) : eddy.rajaonarivony@madavance.org et fara@madavance.org
-sont deux personnes dont la propre boite mail n'aide plus (celle d'Eddy est
-vide, celle de Fara etait sans licence -- voir extract_baobab.py). Pour
-retrouver leurs echanges, on scanne la boite de CHAQUE AUTRE membre du staff
-MadAvance (celles qui ont une vraie licence, donc une boite Exchange
-provisionnee) a la recherche de messages ou l'une des deux personnes
-apparait comme EXPEDITEUR OU DESTINATAIRE (a/cc) -- pas de filtre mot-cle,
-comme extract_baobab.py/export_attachments.py : toutes les pieces jointes de
-ces messages sont extraites.
+Contexte (13-14/08/2026) : eddy.rajaonarivony@madavance.org, fara@madavance.org
+et faravavy.anna@madavance.org sont des personnes dont la propre boite mail
+n'aide plus (celle d'Eddy est vide, celle de Fara etait sans licence -- voir
+extract_baobab.py). Pour retrouver leurs echanges, on scanne la boite de
+CHAQUE AUTRE membre du staff MadAvance (celles qui ont une vraie licence,
+donc une boite Exchange provisionnee) a la recherche de messages ou l'une de
+ces personnes apparait comme EXPEDITEUR OU DESTINATAIRE (a/cc) -- pas de
+filtre mot-cle, comme extract_baobab.py/export_attachments.py : toutes les
+pieces jointes de ces messages sont extraites.
 
 Resilience (13/08/2026, suite a l'echec de "Extraction pieces jointes -
 Equipe" sur fara@madavance.org avant qu'elle ait une licence) : si une boite
@@ -68,7 +68,7 @@ import requests
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
-TARGET_ADDRESSES = {"eddy.rajaonarivony@madavance.org", "fara@madavance.org"}
+TARGET_ADDRESSES = {"eddy.rajaonarivony@madavance.org", "fara@madavance.org", "faravavy.anna@madavance.org"}
 
 # Log de reprise, depose dans le sous-dossier SharePoint de CHAQUE cible (un
 # sous-dossier + un log par personne, meme principe que extract_equipe.py).

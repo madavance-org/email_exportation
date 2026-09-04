@@ -75,6 +75,7 @@ LOG_SAVE_EVERY = 10
 # scripts du repo (OV, Factures/Proforma, Banque, Decaissement, MVOLA, PJ).
 DEFAULT_SENDERS = [
     "alidah@madavance.org",
+    "fanja@madavance.org",
     "fara@madavance.org",
     "comptable@madavance.org",
     "mickael.consultant@madavance.org",

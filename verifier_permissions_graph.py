@@ -72,6 +72,9 @@ def main() -> int:
     check("Sites.Read.All (/groups/{id}/sites/root, site d'un groupe connu -- IT MadAvance)",
           f"{GRAPH}/groups/21dbfa5a-2db8-4a91-b676-e4e786e9083f/sites/root?$select=id,webUrl", token)
 
+    check("Files (drive Inventaire Office 365.xlsx, lecture)",
+          f"{GRAPH}/drives/b!8D4xOy74F0-I2pDx1b5rX8HkGdhgNxpGpD3JvyEKMY4-rXDAT44VQ40NYtVFZG-V/items/01T5F36LFKRCAX3BS5YBHIZDCGCXHWSLR5?$select=id,name", token)
+
     return 0
 
 

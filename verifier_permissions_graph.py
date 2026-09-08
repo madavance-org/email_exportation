@@ -55,6 +55,18 @@ def main() -> int:
     token = get_app_token(tenant_id, client_id, client_secret)
     print("OK authentification.\n")
 
+    # Decodage (non verifie, juste lecture) du JWT pour afficher le Client ID / Tenant ID
+    # de l'application -- utile pour la retrouver dans Entra ID (App registrations), car
+    # ce ne sont pas des secrets (contrairement au client secret).
+    import base64
+    import json as _json
+    payload_b64 = token.split(".")[1]
+    payload_b64 += "=" * (-len(payload_b64) % 4)
+    claims = _json.loads(base64.urlsafe_b64decode(payload_b64))
+    print(f"Application (client) ID : {claims.get('appid')}")
+    print(f"Nom de l'application    : {claims.get('app_displayname')}")
+    print(f"Tenant ID                : {claims.get('tid')}\n")
+
     # Deja connu comme fonctionnel par les autres scripts du repo (Mail.Read), garde
     # ici comme point de reference.
     check("Mail.Read      (/users/{mailbox}/messages, 1 boite connue)",

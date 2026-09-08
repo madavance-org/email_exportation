@@ -1,0 +1,34 @@
+name: office365_email_list
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Chaque lundi a 06:03 UTC -- avant les backups mWater (06:13/06:43), minute
+    # non ronde pour la meme raison documentee dans mWater_backup_MadAvance.yml.
+    - cron: "3 6 * * 1"
+
+concurrency:
+  group: inventaire-office365-xlsx
+  cancel-in-progress: false
+
+jobs:
+  email:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Mettre a jour la feuille Email
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: python office365_email_list.py

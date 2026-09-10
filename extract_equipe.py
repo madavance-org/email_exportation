@@ -85,6 +85,13 @@ DEFAULT_SENDERS = [
     "holisoa.raharijaona@madavance.org",
     "eddy.rajaonarivony@madavance.org",
     "karelle@madavance.org",
+    "angelo.nahavitatsara@madavance.org",
+    "lucienne.rasamoelina@madavance.org",
+    "Frantzel.andrianalison@madavance.org",
+    "fideline.fanomezantsoa@madavance.org",
+    "amede.rafidimanantsoa@madavance.org",
+    "nary.ramanarivo@madavance.org",
+    "domoina@madavance.org",
 ]
 # Taille de chunk pour l'upload SharePoint : doit etre un multiple de 320 KiB.
 CHUNK_SIZE = 320 * 1024 * 30  # ~9,37 Mo

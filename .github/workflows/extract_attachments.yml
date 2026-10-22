@@ -16,7 +16,7 @@ on:
     # programme n'a pas acces aux "inputs" du formulaire manuel -> on utilise
     # les valeurs par defaut du script (les 3 boites, mot-cle "OV") via le
     # fallback ci-dessous.
-    - cron: "0 3 * * *"
+    - cron: "0 3 * * 0"
 
 jobs:
   extract-ov:

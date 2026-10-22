@@ -11,7 +11,7 @@ on:
     # Chaque jour a 03:00 UTC (06:00 heure de Madagascar). Le declenchement
     # programme n'a pas acces aux "inputs" du formulaire manuel -> fallback
     # sur la liste par defaut du script (voir logique SENDERS_ARGS ci-dessous).
-    - cron: "0 3 * * 0"
+    - cron: "0 3 * * 3"
 
 jobs:
   export-files-deleted-users:
